@@ -1,0 +1,13 @@
+bin/
+*.test
+*.out
+*.exe
+vendor/
+
+*.log
+*.err
+
+.idea/
+.vscode/
+.DS_Store
+
