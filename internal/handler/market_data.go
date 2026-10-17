@@ -10,22 +10,25 @@ import (
 
 	"github.com/nguyen-anh-hao/market-data-service/internal/client"
 	"github.com/nguyen-anh-hao/market-data-service/internal/service"
+	"github.com/nguyen-anh-hao/market-data-service/internal/stream"
 )
 
-// Handler holds the read model and the engine client.
+// Handler holds the read model, the engine client and the WebSocket hub.
 type Handler struct {
 	svc    *service.MarketDataService
 	engine *client.EngineClient
+	hub    *stream.Hub
 }
 
 // New wires the HTTP routes.
-func New(svc *service.MarketDataService, engine *client.EngineClient) http.Handler {
-	h := &Handler{svc: svc, engine: engine}
+func New(svc *service.MarketDataService, engine *client.EngineClient, hub *stream.Hub) http.Handler {
+	h := &Handler{svc: svc, engine: engine, hub: hub}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ticker", h.ticker)
 	mux.HandleFunc("GET /book", h.orderBook)
 	mux.HandleFunc("GET /trades-tape", h.tradesTape)
 	mux.HandleFunc("GET /ohlcv", h.ohlcv)
+	mux.HandleFunc("GET /ws", h.hub.Handler)
 	mux.HandleFunc("GET /health", h.health)
 	return mux
 }
@@ -56,7 +59,7 @@ func (h *Handler) orderBook(w http.ResponseWriter, r *http.Request) {
 // tradesTape returns the public anonymized recent trade tape.
 func (h *Handler) tradesTape(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
-	writeJSON(w, http.StatusOK, map[string]interface{}{"trades": h.svc.Tape(symbol)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"trades": h.svc.Tape(r.Context(), symbol)})
 }
 
 // ohlcv returns pre-aggregated OHLCV candles.
@@ -64,7 +67,7 @@ func (h *Handler) ohlcv(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	interval := r.URL.Query().Get("interval")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	writeJSON(w, http.StatusOK, map[string]interface{}{"candles": h.svc.Candles(symbol, interval, limit)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"candles": h.svc.Candles(r.Context(), symbol, interval, limit)})
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {

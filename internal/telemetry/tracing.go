@@ -78,4 +78,3 @@ func Init(serviceName, endpoint string) (func(context.Context) error, error) {
 func NewHandler(next http.Handler, name string) http.Handler {
 	return otelhttp.NewHandler(next, name)
 }
-

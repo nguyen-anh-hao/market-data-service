@@ -1,5 +1,5 @@
-// Package storage contains the Redis wiring used by market-data-service to cache
-// the recent trade tape across restarts/replicas.
+// Package storage contains the Redis wiring for the authoritative market-data
+// read model. Every replica reads/writes the same tape and candle keys.
 package storage
 
 import (
@@ -9,8 +9,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// NewRedis connects to REDIS_ADDR. A blank addr returns nil so the service can
-// run standalone (the in-memory tape remains the source for reads).
+// NewRedis connects to REDIS_ADDR. A blank addr returns nil; main treats that
+// as a fatal configuration error because the read model is Redis-backed.
 func NewRedis(addr string) *redis.Client {
 	if addr == "" {
 		return nil

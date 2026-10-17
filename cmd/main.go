@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/nguyen-anh-hao/market-data-service/internal/client"
 	"github.com/nguyen-anh-hao/market-data-service/internal/domain"
@@ -13,6 +15,7 @@ import (
 	"github.com/nguyen-anh-hao/market-data-service/internal/metrics"
 	"github.com/nguyen-anh-hao/market-data-service/internal/service"
 	"github.com/nguyen-anh-hao/market-data-service/internal/storage"
+	"github.com/nguyen-anh-hao/market-data-service/internal/stream"
 	"github.com/nguyen-anh-hao/market-data-service/internal/telemetry"
 )
 
@@ -21,6 +24,18 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 func main() {
@@ -34,16 +49,55 @@ func main() {
 	}
 	defer ts.Close()
 
-	// Cache mirror (Redis). Nil keeps the service runnable standalone.
+	// Redis is the authoritative read model. It is required: without it a
+	// replica would have to keep tape/candles in process memory.
 	rdb := storage.NewRedis(env("REDIS_ADDR", ""))
+	if rdb == nil {
+		slog.Error("REDIS_ADDR is required for stateless market-data-service operation")
+		os.Exit(1)
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	pingErr := rdb.Ping(pingCtx).Err()
+	cancel()
+	if pingErr != nil {
+		slog.Error("redis unavailable; market-data-service requires shared state", "err", pingErr)
+		os.Exit(1)
+	}
 
 	engine := client.NewEngineClient(env("MATCHING_ENGINE_ADDR", "localhost:9001"))
 	svc := service.New(ts, rdb)
-	h := handler.New(svc, engine)
+	hub := stream.NewHub(engine, svc, time.Duration(envInt("WS_TICKER_POLL_MS", 500))*time.Millisecond)
+	go hub.Run(ctx)
+	h := handler.New(svc, engine, hub)
 
-	// Consume trade events from the gateway via NATS JetStream.
+	// Cross-replica fan-out: the ingesting replica publishes to Redis Pub/Sub and
+	// every replica (including this one) pushes the update to its WS clients.
+	go func() {
+		for u := range svc.SubscribeUpdates(ctx) {
+			if u.Trade != nil {
+				hub.BroadcastTradeView(*u.Trade)
+			}
+			if u.Candle != nil {
+				hub.BroadcastCandle(u.Symbol, u.Interval, *u.Candle)
+			}
+		}
+	}()
+
+	// Consume trade events from order-service via NATS JetStream.
 	sub := eventbus.NewSubscriber(env("NATS_ADDR", ""), func(tr domain.Trade) {
-		svc.Ingest(context.Background(), tr)
+		if !svc.Ingest(context.Background(), tr) {
+			return
+		}
+		tv := service.TradeView{
+			TradeID: tr.TradeID, Symbol: tr.Symbol, Price: tr.Price,
+			Quantity: tr.Quantity, Timestamp: tr.Timestamp,
+		}
+		u := service.Update{Symbol: tr.Symbol, Trade: &tv}
+		if c, ok := svc.CurrentCandle(context.Background(), tr.Symbol, "1m"); ok {
+			u.Interval = "1m"
+			u.Candle = &c
+		}
+		svc.PublishUpdate(context.Background(), u)
 	})
 	sub.Start()
 

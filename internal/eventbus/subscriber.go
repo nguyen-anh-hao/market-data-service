@@ -1,5 +1,5 @@
 // Package eventbus subscribes the market-data service to trade events published
-// by the API Gateway over NATS JetStream.
+// by order-service over NATS JetStream.
 package eventbus
 
 import (

@@ -3,7 +3,7 @@
 package domain
 
 // Trade is the wire contract for an executed trade received from the NATS
-// message bus. Field names mirror api-gateway/internal/eventbus.TradeEvent.
+// message bus. Field names mirror order-service/internal/eventbus.TradeEvent.
 type Trade struct {
 	TradeID        uint64 `json:"trade_id"`
 	Symbol         string `json:"symbol"`
