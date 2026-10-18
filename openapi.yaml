@@ -1,0 +1,204 @@
+openapi: 3.0.3
+info:
+  title: Market Data Service API
+  version: 1.0.0
+  description: >-
+    Internal market-data read model: trade tape, OHLCV candles, ticker and book
+    reads, plus the public WebSocket stream. Errors use {"error": "..."}.
+  license: { name: Proprietary }
+servers:
+  - url: http://localhost:8085
+security: []
+
+tags:
+  - name: Market Data
+  - name: Stream
+  - name: Operations
+
+paths:
+  /health:
+    get:
+      tags: [Operations]
+      summary: Liveness probe
+      responses:
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: ok } } }
+
+  /ticker:
+    get:
+      tags: [Market Data]
+      summary: Last price and best bid/ask (forwarded to the matching engine)
+      parameters:
+        - { name: symbol, in: query, required: true, schema: { type: string, example: AAPL } }
+      responses:
+        '200':
+          description: Ticker
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TickerResponse' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+
+  /book:
+    get:
+      tags: [Market Data]
+      summary: Level-2 order book snapshot
+      parameters:
+        - { name: symbol, in: query, required: true, schema: { type: string, example: AAPL } }
+        - { name: depth, in: query, schema: { type: integer, example: 20 } }
+      responses:
+        '200':
+          description: Order book
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderBook' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+
+  /trades-tape:
+    get:
+      tags: [Market Data]
+      summary: Recent anonymized trades
+      parameters:
+        - { name: symbol, in: query, schema: { type: string, example: AAPL } }
+      responses:
+        '200':
+          description: Trade tape
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TapeResponse' }
+
+  /ohlcv:
+    get:
+      tags: [Market Data]
+      summary: Pre-aggregated OHLCV candles
+      parameters:
+        - { name: symbol, in: query, required: true, schema: { type: string, example: AAPL } }
+        - name: interval
+          in: query
+          schema: { type: string, enum: [1s, 1m, 5m, 1h, 1d], default: 1m }
+        - { name: limit, in: query, schema: { type: integer, example: 120 } }
+      responses:
+        '200':
+          description: Candles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OHLCVResponse' }
+
+  /ws:
+    get:
+      tags: [Stream]
+      summary: Live WebSocket stream
+      description: >-
+        Upgrade to WebSocket. Query parameters: symbols (comma separated) and
+        channels (ticker,candle,trade). Frames are JSON objects with a type and data field.
+      parameters:
+        - { name: symbols, in: query, schema: { type: string, example: "AAPL,MSFT" } }
+        - { name: channels, in: query, schema: { type: string, example: "ticker,candle,trade" } }
+      responses:
+        '101':
+          description: Switching protocols; subsequent frames are JSON messages
+        '400':
+          description: Invalid symbols or channels
+
+components:
+  responses:
+    BadGateway:
+      description: Matching engine unavailable
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      example: { error: matching engine unavailable }
+      properties:
+        error: { type: string }
+
+    Ticker:
+      type: object
+      example:
+        symbol: AAPL
+        last_price: "150.25"
+        best_bid: "150.20"
+        best_ask: "150.30"
+      properties:
+        symbol: { type: string }
+        last_price: { type: string }
+        best_bid: { type: string }
+        best_ask: { type: string }
+
+    TickerResponse:
+      type: object
+      properties:
+        ticker: { $ref: '#/components/schemas/Ticker' }
+
+    OrderBook:
+      type: object
+      example:
+        symbol: AAPL
+        bids: [["150.20", "300"], ["150.10", "500"]]
+        asks: [["150.30", "250"], ["150.40", "400"]]
+      properties:
+        symbol: { type: string }
+        bids:
+          type: array
+          description: Each entry is [price, quantity]
+          items:
+            type: array
+            items: { type: string }
+        asks:
+          type: array
+          description: Each entry is [price, quantity]
+          items:
+            type: array
+            items: { type: string }
+
+    TradeView:
+      type: object
+      example:
+        trade_id: 10001
+        symbol: AAPL
+        price: "150.00"
+        quantity: "4"
+        timestamp_ns: 1760000000000000000
+      properties:
+        trade_id: { type: integer, format: int64 }
+        symbol: { type: string }
+        price: { type: string }
+        quantity: { type: string }
+        timestamp_ns: { type: integer, format: int64 }
+
+    TapeResponse:
+      type: object
+      properties:
+        trades:
+          type: array
+          items: { $ref: '#/components/schemas/TradeView' }
+
+    Candle:
+      type: object
+      example:
+        timestamp: 1760000000
+        open: 150.0
+        high: 151.2
+        low: 149.8
+        close: 150.9
+        volume: 12000
+      properties:
+        timestamp: { type: integer, format: int64 }
+        open: { type: number }
+        high: { type: number }
+        low: { type: number }
+        close: { type: number }
+        volume: { type: number }
+
+    OHLCVResponse:
+      type: object
+      properties:
+        candles:
+          type: array
+          items: { $ref: '#/components/schemas/Candle' }
+

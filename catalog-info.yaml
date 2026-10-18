@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: market-data-service
+  description: Trade tape, OHLCV candles, ticker/book reads and the WebSocket fan-out.
+  annotations:
+    github.com/project-slug: nguyen-anh-hao/market-data-service
+  tags: [go, market-data, websocket]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: nguyen-anh-hao
+  system: trading-exchange
+  dependsOn:
+    - component:matching-engine
+    - resource:redis
+    - resource:nats
+    - resource:timescaledb

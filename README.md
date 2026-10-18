@@ -1,62 +1,41 @@
-# Market Data Service (`market-data-service`)
+# market-data-service
 
-> **Time-Series Market Data Service** built with Go — owns the read-side market
-> data pipeline: raw trade persistence, OHLCV aggregation and the public trade
-> tape.
+## Purpose
 
----
+Owns the market-data read model: the public trade tape, pre-aggregated candles and the WebSocket fan-out for priceboards and charts. It also serves ticker and book reads by forwarding them to the matching engine. It does not match orders, own positions or produce trades.
 
-## 1. Primary Responsibility
+## Domain knowledge
 
-The Market Data Service decouples market-data reads from the API Gateway. It:
+Executed trades arrive as messages and are deduplicated by trade identifier before anything else happens. A duplicate is dropped, while a new trade is appended to the durable tick store, to a bounded tape and to every supported candle interval. Intervals are one second, one minute, five minutes, one hour and one day, with one minute as the fallback for an unknown interval.
 
-1. **Consumes trade events** from NATS JetStream (`market.trades.executed`)
-   published by the API Gateway after each matched order.
-2. **Persists raw ticks** into TimescaleDB (append-only `ticks` hypertable) as the
-   durable source of truth.
-3. **Pre-aggregates OHLCV candles** (`1s/1m/5m/1h/1d`) in memory as trades arrive.
-4. **Maintains the public trade tape** (in memory, mirrored to Redis).
-5. **Serves market-data endpoints** and forwards `ticker`/`book` reads to the
-   matching engine.
+Candle roll-ups are atomic: within a bucket the high and low extend, the close moves and volume accumulates, and crossing a bucket boundary closes the previous candle and starts a new one. The tape keeps two thousand trades and each interval keeps one thousand completed candles, so both are bounded windows rather than full history. Public trade views are anonymized and never expose account identifiers.
 
----
+The WebSocket hub sends a snapshot on connect and then ticker, candle and trade events. The hub polls the matching engine once per subscribed symbol and folds the last price into a live one-minute candle, which keeps charts moving even before the first trade event arrives. Candle state is merged so authoritative volume and extremes are not lost.
 
-## 2. Boundaries & I/O
+## Decisions and consequences
 
-- **Ingress (async):** NATS JetStream subject `market.trades.executed` (stream `TRADES`).
-- **Ingress (sync):** `api-gateway` proxies `GET /ticker`, `/book`, `/trades-tape`, `/ohlcv`.
-- **Downstream:** `matching-engine` (`/ticker`, `/book`).
-- **Data Stores:**
-  - **TimescaleDB** — durable raw ticks (`market_data` DB, port `5433`).
-  - **Redis** — recent trade tape mirror.
+**Materialized view in Redis.** Tape and candles are precomputed read models rather than query-time aggregations. This gives predictable latency and lets any replica serve any client, at the cost of Redis being mandatory.
 
----
+**Idempotent consumer with a time-bounded dedupe set.** Trade identifiers are remembered for twenty-four hours, which absorbs at-least-once delivery. The window is the limit: a replay older than that would be ingested again.
 
-## 3. Quick Start
+**Time-series hypertable for raw ticks.** TimescaleDB is the durable append-only log, which is the right shape for tick data. It is optional for local runs and is currently write-only, so it cannot yet rebuild the Redis read model.
 
-```bash
-export NATS_ADDR="localhost:4222"
-export REDIS_ADDR="localhost:6379"
-export TIMESCALE_DSN="postgres://market_data:market_data@localhost:5433/market_data?sslmode=disable"
-export MATCHING_ENGINE_ADDR="localhost:9001"
+**Pub/Sub fan-out across replicas.** Ingesting replicas publish updates and every replica pushes to its own WebSocket clients. This makes the hub stateless, but Pub/Sub has no replay, so a disconnected client can only resynchronize through a fresh snapshot.
 
-go run ./cmd/main.go
-```
+**Lua candle roll-up.** Atomic scripts avoid read-modify-write races between replicas and keep OHLCV consistent. The cost is that candle updates concentrate on a small number of Redis keys.
 
-Verify:
+## Operations and known limits
 
-```bash
-curl http://localhost:8085/health
-curl "http://localhost:8085/ohlcv?symbol=AAPL&interval=1m&limit=100"
-```
+Redis is required and the service exits without it; TimescaleDB is optional and a failure only disables durable ticks. Message consumption is optional for local UI work, because the ticker poll still produces live one-minute candles. The WebSocket endpoint is public at the edge, so connection count and message rate are the capacity signals to watch.
 
----
+Losing Redis loses the tape and candle history, and there is no replay path from TimescaleDB today. The dedupe set and bounded lists mean the service is not a historical archive. The ticker poll interval controls upstream load and chart freshness, and the hub depends on the matching engine being reachable for ticker and book reads.
 
-## 4. Engineering Roadmap
+The service listens on port 8085 and exposes health, metrics, tape, candles, ticker, book and the WebSocket route. Raw ticks are written asynchronously, so a tick store outage does not block trade ingestion or tape updates, but it does create a durability gap.
 
-| Version | Phase | Focus |
-| :--- | :--- | :--- |
-| **v1.0.0** *(Current)* | **Baseline** | NATS JetStream consumer, in-memory OHLCV + tape, TimescaleDB tick persistence. |
-| **v1.1.0** | **WebSocket Streaming** | Serve `orderbook@100ms` + `trades` streams (currently dead code in the gateway). |
-| **v1.2.0** | **TimescaleDB Continuous Aggregates** | Replace in-memory candle roll-ups with `continuous_aggregate` views for long history. |
-| **v2.0.0** | **Multi-replica Redis read model** | Make Redis the authoritative read model so the service scales horizontally. |
+## Future direction
+
+Business: longer history and additional intervals are the likely requests, and both depend on continuous aggregates rather than bounded in-memory windows.
+
+Technical: Timescale continuous aggregates, a backfill or replay tool, and a dedicated streaming gateway for WebSocket scaling. Binary WebSocket payloads are a later optimization.
+
+Boundaries: the WebSocket hub is a candidate for a separate edge service once connection volume outgrows the current read model.
