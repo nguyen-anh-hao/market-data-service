@@ -13,6 +13,7 @@ import (
 	"github.com/nguyen-anh-hao/market-data-service/internal/eventbus"
 	"github.com/nguyen-anh-hao/market-data-service/internal/handler"
 	"github.com/nguyen-anh-hao/market-data-service/internal/metrics"
+	"github.com/nguyen-anh-hao/market-data-service/internal/middleware"
 	"github.com/nguyen-anh-hao/market-data-service/internal/service"
 	"github.com/nguyen-anh-hao/market-data-service/internal/storage"
 	"github.com/nguyen-anh-hao/market-data-service/internal/stream"
@@ -119,7 +120,7 @@ func main() {
 
 	root := http.NewServeMux()
 	root.Handle("GET /metrics", metrics.Default.Handler())
-	root.Handle("/", telemetry.NewHandler(h, "market-data-service"))
+	root.Handle("/", telemetry.NewHandler(middleware.Metrics(h), "market-data-service"))
 
 	addr := ":" + env("MARKET_DATA_PORT", "8085")
 	slog.Info("market-data-service listening", "addr", addr)

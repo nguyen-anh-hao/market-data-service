@@ -15,7 +15,13 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/nguyen-anh-hao/market-data-service/internal/domain"
+	"github.com/nguyen-anh-hao/market-data-service/internal/metrics"
 	"github.com/nguyen-anh-hao/market-data-service/internal/storage"
+)
+
+var (
+	ticksIngested = metrics.Default.Counter("trading_market_ticks_ingested_total", "Trades ingested into the read model.", "symbol")
+	ticksDeduped  = metrics.Default.Counter("trading_market_dedupe_total", "Duplicate trade events skipped.")
 )
 
 const (
@@ -95,6 +101,7 @@ func (s *MarketDataService) Ingest(ctx context.Context, tr domain.Trade) bool {
 	if !pok || !qok || tr.Symbol == "" {
 		return false
 	}
+	ticksIngested.Inc(tr.Symbol)
 	s.persistTick(ctx, tr)
 	if s.rdb == nil {
 		return false
@@ -110,6 +117,7 @@ func (s *MarketDataService) Ingest(ctx context.Context, tr domain.Trade) bool {
 		if err != nil {
 			slog.Warn("market-data: dedupe check failed", "trade_id", tr.TradeID, "err", err)
 		} else if !ok {
+			ticksDeduped.Inc()
 			return false
 		}
 	}

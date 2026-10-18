@@ -17,7 +17,14 @@ import (
 
 	"github.com/nguyen-anh-hao/market-data-service/internal/client"
 	"github.com/nguyen-anh-hao/market-data-service/internal/domain"
+	"github.com/nguyen-anh-hao/market-data-service/internal/metrics"
 	"github.com/nguyen-anh-hao/market-data-service/internal/service"
+)
+
+var (
+	wsConnections = metrics.Default.Gauge("trading_ws_connections", "Connected WebSocket clients.")
+	wsDropped     = metrics.Default.Counter("trading_ws_dropped_total", "WebSocket frames dropped under backpressure.")
+	wsSent        = metrics.Default.Counter("trading_ws_messages_sent_total", "WebSocket messages written.")
 )
 
 const (
@@ -121,6 +128,7 @@ func (c *wsClient) writeLoop(ctx context.Context) {
 				c.conn.CloseNow()
 				return
 			}
+			wsSent.Inc()
 		case <-ticker.C:
 			pctx, cancel := context.WithTimeout(ctx, writeTimeout)
 			err := c.conn.Ping(pctx)
@@ -141,19 +149,24 @@ func (c *wsClient) enqueue(msg []byte) {
 	default:
 		// Slow consumer: drop the frame instead of blocking the hub. The next
 		// ticker/candle update will resynchronise the client.
+		wsDropped.Inc()
 	}
 }
 
 func (h *Hub) add(c *wsClient) {
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
+	n := len(h.clients)
 	h.mu.Unlock()
+	wsConnections.Set(float64(n))
 }
 
 func (h *Hub) remove(c *wsClient) {
 	h.mu.Lock()
 	delete(h.clients, c)
+	n := len(h.clients)
 	h.mu.Unlock()
+	wsConnections.Set(float64(n))
 }
 
 func parseSymbols(raw string) map[string]struct{} {
