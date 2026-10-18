@@ -22,9 +22,10 @@ import (
 )
 
 var (
-	wsConnections = metrics.Default.Gauge("trading_ws_connections", "Connected WebSocket clients.")
-	wsDropped     = metrics.Default.Counter("trading_ws_dropped_total", "WebSocket frames dropped under backpressure.")
-	wsSent        = metrics.Default.Counter("trading_ws_messages_sent_total", "WebSocket messages written.")
+	wsConnections   = metrics.Default.Gauge("trading_ws_connections", "Connected WebSocket clients.")
+	wsDropped       = metrics.Default.Counter("trading_ws_dropped_total", "WebSocket frames dropped under backpressure.")
+	wsSent          = metrics.Default.Counter("trading_ws_messages_sent_total", "WebSocket messages written.")
+	wsTickerCandles = metrics.Default.Counter("trading_ws_ticker_candles_total", "Live 1m candles derived from ticker polls.", "symbol")
 )
 
 const (
@@ -62,6 +63,11 @@ type Hub struct {
 
 	mu      sync.RWMutex
 	clients map[*wsClient]struct{}
+
+	// liveMu guards the ticker-derived 1m candle per symbol. This keeps the
+	// chart moving even when NATS is disabled or no trade event has arrived yet.
+	liveMu      sync.Mutex
+	liveCandles map[string]domain.Candle
 }
 
 func NewHub(engine *client.EngineClient, svc *service.MarketDataService, tickerEvery time.Duration) *Hub {
@@ -73,6 +79,7 @@ func NewHub(engine *client.EngineClient, svc *service.MarketDataService, tickerE
 		svc:         svc,
 		tickerEvery: tickerEvery,
 		clients:     map[*wsClient]struct{}{},
+		liveCandles: map[string]domain.Candle{},
 	}
 }
 

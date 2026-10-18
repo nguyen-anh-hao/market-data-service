@@ -36,7 +36,7 @@ func NewSubscriber(addr string, onTrade func(domain.Trade)) *Subscriber {
 // Start begins the connect + subscribe loop on a background goroutine.
 func (s *Subscriber) Start() {
 	if s.addr == "" {
-		slog.Warn("eventbus: NATS_ADDR unset, market data subscription disabled")
+		slog.Warn("eventbus: NATS_ADDR unset, market data subscription disabled; live candles fall back to ticker polling")
 		return
 	}
 	go func() {
