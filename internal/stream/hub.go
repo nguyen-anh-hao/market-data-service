@@ -26,6 +26,9 @@ var (
 	wsDropped       = metrics.Default.Counter("trading_ws_dropped_total", "WebSocket frames dropped under backpressure.")
 	wsSent          = metrics.Default.Counter("trading_ws_messages_sent_total", "WebSocket messages written.")
 	wsTickerCandles = metrics.Default.Counter("trading_ws_ticker_candles_total", "Live 1m candles derived from ticker polls.", "symbol")
+	wsSendDuration  = metrics.Default.Histogram(
+		"trading_market_ws_send_duration_seconds", "Server-side WebSocket write duration.",
+		[]float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1})
 )
 
 const (
@@ -129,7 +132,9 @@ func (c *wsClient) writeLoop(ctx context.Context) {
 		select {
 		case msg := <-c.send:
 			wctx, cancel := context.WithTimeout(ctx, writeTimeout)
+			started := time.Now()
 			err := c.conn.Write(wctx, websocket.MessageText, msg)
+			wsSendDuration.Observe(time.Since(started).Seconds())
 			cancel()
 			if err != nil {
 				c.conn.CloseNow()

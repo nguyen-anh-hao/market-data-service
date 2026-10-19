@@ -46,9 +46,15 @@ func (r *Registry) Counter(name, help string, labelNames ...string) *Counter {
 }
 
 func (c *Counter) Inc(labels ...string) {
+	c.Add(1, labels...)
+}
+
+// Add increments the counter by delta. Useful for bulk updates where the
+// upstream system already provides a delta (for example GC cycle counts).
+func (c *Counter) Add(delta float64, labels ...string) {
 	k := strings.Join(labels, "\x00")
 	c.mu.Lock()
-	c.values[k]++
+	c.values[k] += delta
 	c.mu.Unlock()
 }
 
@@ -109,6 +115,14 @@ func (g *Gauge) Set(v float64, labels ...string) {
 	k := strings.Join(labels, "\x00")
 	g.mu.Lock()
 	g.values[k] = v
+	g.mu.Unlock()
+}
+
+// Add adds delta to the gauge. It is used for in-flight counters.
+func (g *Gauge) Add(delta float64, labels ...string) {
+	k := strings.Join(labels, "\x00")
+	g.mu.Lock()
+	g.values[k] += delta
 	g.mu.Unlock()
 }
 
